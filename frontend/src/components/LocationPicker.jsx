@@ -1,16 +1,7 @@
 import React, { useState } from 'react'
 import { MapPinIcon, ArrowPathIcon, CheckCircleIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline'
 
-/**
- * LocationPicker
- * Props:
- *  - onLocationSelect(locationData) → dipanggil saat lokasi berhasil didapat
- *    locationData: { lat, lng, googleMapsUrl, address }
- *  - adminPhone: nomor WA admin (format: 628xxxxxxxxxx)
- *  - orderCode: kode order (opsional, untuk pesan WA)
- *  - customerName: nama pelanggan (opsional, untuk pesan WA)
- */
-const LocationPicker = ({ onLocationSelect, adminPhone, orderCode, customerName }) => {
+const LocationPicker = ({ onLocationSelect }) => {
   const [status, setStatus] = useState('idle') // idle | loading | success | error
   const [locationData, setLocationData] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
@@ -60,23 +51,6 @@ const LocationPicker = ({ onLocationSelect, adminPhone, orderCode, customerName 
     )
   }
 
-  const sendToWhatsApp = () => {
-    if (!locationData || !adminPhone) return
-
-    const nama = customerName || 'Pelanggan'
-    const kode = orderCode ? `\nKode Order: *${orderCode}*` : ''
-    const message =
-      `Halo Admin LaundryFlow 🧺\n\n` +
-      `Saya *${nama}* ingin berbagi lokasi penjemputan:${kode}\n\n` +
-      `📍 *Lokasi Saya (Realtime):*\n` +
-      `${locationData.googleMapsUrl}\n\n` +
-      `Koordinat: ${locationData.lat.toFixed(6)}, ${locationData.lng.toFixed(6)}\n\n` +
-      `Mohon segera dijemput, terima kasih! 🙏`
-
-    const waUrl = `https://wa.me/${adminPhone}?text=${encodeURIComponent(message)}`
-    window.open(waUrl, '_blank')
-  }
-
   return (
     <div className="space-y-2">
       {/* Tombol Ambil Lokasi GPS */}
@@ -100,17 +74,7 @@ const LocationPicker = ({ onLocationSelect, adminPhone, orderCode, customerName 
           )}
         </button>
 
-        {/* Tombol Share ke WA Admin — muncul hanya setelah dapat lokasi */}
-        {status === 'success' && adminPhone && (
-          <button
-            type="button"
-            onClick={sendToWhatsApp}
-            className="flex items-center gap-2 px-3 py-2 bg-emerald-500 text-white rounded-xl text-sm font-medium hover:bg-emerald-600 active:scale-95 transition-all duration-150"
-          >
-            <span>📲</span>
-            Kirim ke WA Admin
-          </button>
-        )}
+        {/* Tombol Share ke WA Admin — dihapus, link Maps sudah otomatis masuk ke pesan order */}
       </div>
 
       {/* Status sukses */}

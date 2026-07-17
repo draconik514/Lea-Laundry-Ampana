@@ -52,6 +52,7 @@ const Customer = () => {
   const [code, setCode] = useState('')
   const [showOrderForm, setShowOrderForm] = useState(false)
   const [form, setForm] = useState(emptyForm)
+  const [gpsCoords, setGpsCoords] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [successOrder, setSuccessOrder] = useState(null)
   const orderFormRef = useRef(null)
@@ -92,11 +93,15 @@ const Customer = () => {
       const serviceName = selectedService?.name || '-'
       const unit = selectedService?.unit || 'kg'
       const qty = form.weight ? `${form.weight} ${unit}` : 'belum ditentukan'
+      const mapsLink = gpsCoords
+        ? `https://maps.google.com/?q=${gpsCoords.lat},${gpsCoords.lng}`
+        : null
       const msg =
         `🧺 *PESANAN ANTAR JEMPUT BARU!*\n\n` +
         `👤 Nama: *${form.customer_name}*\n` +
         `📱 WhatsApp: *${form.customer_phone}*\n` +
-        `📍 Alamat Pickup: ${form.customer_address}\n` +
+        `📍 Alamat: ${form.customer_address}\n` +
+        (mapsLink ? `🗺️ *Buka di Maps: ${mapsLink}*\n` : '') +
         `👕 Layanan: ${serviceName}\n` +
         `⚖️ Jumlah: ${qty}\n` +
         (form.note ? `📝 Catatan: ${form.note}\n` : '') +
@@ -459,7 +464,10 @@ const Customer = () => {
                       <LocationPicker
                         adminPhone={ADMIN_WA}
                         customerName={form.customer_name}
-                        onLocationSelect={({ address }) => setForm(f => ({ ...f, customer_address: address }))}
+                        onLocationSelect={({ address, lat, lng }) => {
+                          setForm(f => ({ ...f, customer_address: address }))
+                          if (lat && lng) setGpsCoords({ lat, lng })
+                        }}
                       />
                       <textarea
                         value={form.customer_address}
