@@ -95,7 +95,7 @@ const Customer = () => {
       const mapsLink = gpsCoords
         ? `https://maps.google.com/?q=${gpsCoords.lat},${gpsCoords.lng}`
         : null
-      const lines = [
+      const msg = [
         '🧺 *PESANAN ANTAR JEMPUT BARU!*',
         '',
         `👤 Nama: *${form.customer_name}*`,
@@ -110,8 +110,8 @@ const Customer = () => {
         `🔗 Tracking: ${trackUrl}`,
         '',
         'Segera konfirmasi penjemputan ke pelanggan.',
-      ]
-      const waUrl = `https://wa.me/${ADMIN_WA}?text=${encodeURIComponent(lines.join('\n'))}`
+      ].join('%0A')
+      const waUrl = `https://wa.me/${ADMIN_WA}?text=${msg}`
       const a = document.createElement('a')
       a.href = waUrl
       a.target = '_blank'
