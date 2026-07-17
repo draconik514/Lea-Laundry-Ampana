@@ -55,10 +55,10 @@ const Sidebar = ({ isOpen, setIsOpen }) => {
         {/* Logo */}
         <div className="flex items-center gap-3 px-5 py-5 border-b border-gray-100">
           <div className="w-10 h-10 rounded-2xl overflow-hidden shadow-lg">
-            <img src="/laundryfoto.jpg" alt="Mega Laundry" className="w-full h-full object-cover" />
+            <img src="/laundryfoto.jpg" alt="Lea Laundry Ampana" className="w-full h-full object-cover" />
           </div>
           <div>
-            <p className="text-base font-bold text-gray-900 leading-tight">Mega Laundry</p>
+            <p className="text-base font-bold text-gray-900 leading-tight">Lea Laundry Ampana</p>
             <p className="text-xs text-gray-400 leading-tight">Manajemen Laundry</p>
           </div>
         </div>

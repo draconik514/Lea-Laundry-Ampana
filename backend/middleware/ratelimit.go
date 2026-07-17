@@ -3,13 +3,15 @@ package middleware
 import (
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
 
 type client struct {
-	limiter *rate.Limiter
+	limiter  *rate.Limiter
+	lastSeen time.Time
 }
 
 var (
@@ -17,16 +19,33 @@ var (
 	mu      sync.Mutex
 )
 
+func init() {
+	// Bersihkan IP lama setiap 5 menit — cegah memory leak
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			mu.Lock()
+			for ip, c := range clients {
+				if time.Since(c.lastSeen) > 10*time.Minute {
+					delete(clients, ip)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
+}
+
 func getLimiter(ip string, r rate.Limit, b int) *rate.Limiter {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if c, exists := clients[ip]; exists {
+		c.lastSeen = time.Now()
 		return c.limiter
 	}
 
 	l := rate.NewLimiter(r, b)
-	clients[ip] = &client{limiter: l}
+	clients[ip] = &client{limiter: l, lastSeen: time.Now()}
 	return l
 }
 

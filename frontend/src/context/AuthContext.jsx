@@ -22,13 +22,13 @@ export const AuthProvider = ({ children }) => {
       // Decode token to get user info
       try {
         const payload = JSON.parse(atob(token.split('.')[1]))
-        setUser({
-          id: payload.id,
-          name: payload.name,
-          role: payload.role
-        })
-      } catch (e) {
-        console.error('Invalid token')
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+          localStorage.removeItem('token')
+          setToken(null)
+        } else {
+          setUser({ id: payload.id, name: payload.name, role: payload.role })
+        }
+      } catch {
         localStorage.removeItem('token')
         setToken(null)
       }

@@ -56,6 +56,26 @@ func CreateFeedback(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
+func DeleteFeedback(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
+		res, err := db.ExecContext(ctx, "DELETE FROM feedbacks WHERE id = ?", id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menghapus feedback"})
+			return
+		}
+		rows, _ := res.RowsAffected()
+		if rows == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Feedback tidak ditemukan"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Feedback berhasil dihapus"})
+	}
+}
+
 func GetFeedbacks(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -70,7 +90,18 @@ func GetFeedbacks(db *sql.DB) gin.HandlerFunc {
 
 		var total int
 		var totalRating int
-		db.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(SUM(rating), 0) FROM feedbacks").Scan(&total, &totalRating)
+		var dist [5]int
+		db.QueryRowContext(ctx, `
+			SELECT
+				COUNT(*),
+				COALESCE(SUM(rating), 0),
+				COUNT(CASE WHEN rating=5 THEN 1 END),
+				COUNT(CASE WHEN rating=4 THEN 1 END),
+				COUNT(CASE WHEN rating=3 THEN 1 END),
+				COUNT(CASE WHEN rating=2 THEN 1 END),
+				COUNT(CASE WHEN rating=1 THEN 1 END)
+			FROM feedbacks
+		`).Scan(&total, &totalRating, &dist[0], &dist[1], &dist[2], &dist[3], &dist[4])
 
 		rows, err := db.QueryContext(ctx, `
 			SELECT id, order_code, customer_name, rating, message, created_at
@@ -112,6 +143,9 @@ func GetFeedbacks(db *sql.DB) gin.HandlerFunc {
 			"total":       total,
 			"page":        page,
 			"total_pages": totalPages,
+			"distribution": gin.H{
+				"5": dist[0], "4": dist[1], "3": dist[2], "2": dist[3], "1": dist[4],
+			},
 		})
 	}
 }

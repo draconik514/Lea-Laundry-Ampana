@@ -4,9 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+var (
+	dashboardCache     *DashboardStats
+	dashboardCacheTime time.Time
+	dashboardMu        sync.Mutex
+)
+
+const dashboardCacheTTL = 30 * time.Second
 
 type DashboardStats struct {
 	TotalOrders      int           `json:"total_orders"`
@@ -34,25 +44,36 @@ type RecentOrder struct {
 
 func GetDashboardStats(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		dashboardMu.Lock()
+		if dashboardCache != nil && time.Since(dashboardCacheTime) < dashboardCacheTTL {
+			cached := *dashboardCache
+			dashboardMu.Unlock()
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+		dashboardMu.Unlock()
+
 		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
 		defer cancel()
 
 		stats := DashboardStats{}
 
-		db.QueryRowContext(ctx, "SELECT COUNT(*) FROM orders").Scan(&stats.TotalOrders)
-		db.QueryRowContext(ctx, "SELECT COUNT(*) FROM orders WHERE status NOT IN ('completed', 'cancelled')").Scan(&stats.ProcessingOrders)
-		db.QueryRowContext(ctx, "SELECT COUNT(*) FROM orders WHERE status = 'completed'").Scan(&stats.CompletedOrders)
+		// Batch semua COUNT dalam 1 query — hemat 4 round-trip ke Turso
+		db.QueryRowContext(ctx, `
+			SELECT
+				COUNT(*),
+				COUNT(CASE WHEN status NOT IN ('completed','cancelled') THEN 1 END),
+				COUNT(CASE WHEN status = 'completed' THEN 1 END),
+				COALESCE(SUM(CASE WHEN DATE(created_at) = DATE('now') AND status = 'completed' THEN total_price END), 0)
+			FROM orders
+		`).Scan(&stats.TotalOrders, &stats.ProcessingOrders, &stats.CompletedOrders, &stats.RevenueToday)
+
 		db.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM orders o
 			JOIN services s ON o.service_id = s.id
 			WHERE o.created_at < datetime('now', '-' || s.estimated_day || ' days')
 			AND o.status NOT IN ('completed', 'cancelled')
 		`).Scan(&stats.LateOrders)
-		db.QueryRowContext(ctx, `
-			SELECT COALESCE(SUM(total_price), 0)
-			FROM orders
-			WHERE DATE(created_at) = DATE('now') AND status = 'completed'
-		`).Scan(&stats.RevenueToday)
 
 		days := []string{"Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"}
 		stats.WeeklyData = make([]WeeklyOrder, 7)
@@ -92,6 +113,11 @@ func GetDashboardStats(db *sql.DB) gin.HandlerFunc {
 				stats.RecentOrders = append(stats.RecentOrders, order)
 			}
 		}
+
+		dashboardMu.Lock()
+		dashboardCache = &stats
+		dashboardCacheTime = time.Now()
+		dashboardMu.Unlock()
 
 		c.JSON(http.StatusOK, stats)
 	}

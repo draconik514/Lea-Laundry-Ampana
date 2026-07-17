@@ -7,7 +7,7 @@ const allStatuses = [
   { key: 'washing', label: 'Dicuci', icon: '🫧' },
   { key: 'drying', label: 'Kering', icon: '💨' },
   { key: 'ironing', label: 'Setrika', icon: '👕' },
-  { key: 'ready_for_delivery', label: 'Siap', icon: '📫' },
+  { key: 'ready_for_delivery', label: 'Siap Diantar', icon: '📫' },
   { key: 'completed', label: 'Selesai', icon: '✅' },
 ]
 

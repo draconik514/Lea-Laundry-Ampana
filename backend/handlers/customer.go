@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -19,7 +20,7 @@ type CustomerOrderRequest struct {
 	Longitude       *float64 `json:"longitude"`
 	LocationURL     string   `json:"location_url"`
 	ServiceID       int      `json:"service_id" binding:"required"`
-	Weight          float64  `json:"weight" binding:"required"`
+	Weight          float64  `json:"weight"`
 	Note            string   `json:"note"`
 	OrderSource     string   `json:"order_source"`
 }
@@ -40,6 +41,7 @@ type CustomerOrderResponse struct {
 	ServiceName     string    `json:"service_name"`
 	ServiceID       int       `json:"service_id"`
 	EstimatedDay    int       `json:"estimated_day"`
+	ServiceUnit     string    `json:"service_unit"`
 }
 
 type CustomerStatusHistory struct {
@@ -65,20 +67,22 @@ func CreateCustomerOrder(db *sql.DB) gin.HandlerFunc {
 			addressWithGPS = req.CustomerAddress + " | GPS: " + req.LocationURL
 		}
 
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
 		// Cari customer yang sudah ada berdasarkan nomor HP, kalau tidak ada buat baru
 		var customerID int64
 		if req.CustomerPhone != "" {
 			var existingID int
-			err := db.QueryRow(`SELECT id FROM customers WHERE phone = ?`, req.CustomerPhone).Scan(&existingID)
+			err := db.QueryRowContext(ctx, `SELECT id FROM customers WHERE phone = ?`, req.CustomerPhone).Scan(&existingID)
 			if err == nil {
 				customerID = int64(existingID)
-				// Update alamat customer dengan GPS terbaru
-				db.Exec(`UPDATE customers SET address = ? WHERE id = ?`, addressWithGPS, existingID)
+				db.ExecContext(ctx, `UPDATE customers SET address = ? WHERE id = ?`, addressWithGPS, existingID)
 			}
 		}
 
 		if customerID == 0 {
-			result, err := db.Exec(
+			result, err := db.ExecContext(ctx,
 				`INSERT INTO customers (name, phone, address) VALUES (?, ?, ?)`,
 				req.CustomerName, req.CustomerPhone, addressWithGPS,
 			)
@@ -90,13 +94,13 @@ func CreateCustomerOrder(db *sql.DB) gin.HandlerFunc {
 		}
 
 		// Get service details
-		var serviceName string
+		var serviceName, serviceUnit string
 		var pricePerKg float64
 		var estimatedDay int
-		if err := db.QueryRow(
-			`SELECT name, price_per_kg, estimated_day FROM services WHERE id = ?`,
+		if err := db.QueryRowContext(ctx,
+			`SELECT name, price_per_kg, estimated_day, COALESCE(unit,'Kg') FROM services WHERE id = ?`,
 			req.ServiceID,
-		).Scan(&serviceName, &pricePerKg, &estimatedDay); err != nil {
+		).Scan(&serviceName, &pricePerKg, &estimatedDay, &serviceUnit); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid service"})
 			return
 		}
@@ -104,8 +108,7 @@ func CreateCustomerOrder(db *sql.DB) gin.HandlerFunc {
 		totalPrice := pricePerKg * req.Weight
 		code := fmt.Sprintf("LW%s", strings.ToUpper(uuid.New().String()[:8]))
 
-		// Insert order
-		orderResult, err := db.Exec(
+		orderResult, err := db.ExecContext(ctx,
 			`INSERT INTO orders (code, customer_id, service_id, weight, total_price, status, note, order_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			code, customerID, req.ServiceID, req.Weight, totalPrice, "pending_pickup", req.Note, req.OrderSource,
 		)
@@ -115,7 +118,7 @@ func CreateCustomerOrder(db *sql.DB) gin.HandlerFunc {
 		}
 		orderID, _ := orderResult.LastInsertId()
 
-		db.Exec(`INSERT INTO status_histories (order_id, status) VALUES (?, ?)`, orderID, "pending_pickup")
+		db.ExecContext(ctx, `INSERT INTO status_histories (order_id, status) VALUES (?, ?)`, orderID, "pending_pickup")
 
 		response := CustomerOrderResponse{
 			ID:              int(orderID),
@@ -133,6 +136,7 @@ func CreateCustomerOrder(db *sql.DB) gin.HandlerFunc {
 			ServiceName:     serviceName,
 			ServiceID:       req.ServiceID,
 			EstimatedDay:    estimatedDay,
+			ServiceUnit:     serviceUnit,
 		}
 
 		c.JSON(http.StatusCreated, gin.H{
@@ -147,14 +151,17 @@ func GetCustomerOrder(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		code := strings.TrimSpace(c.Param("code"))
 
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
 		var order CustomerOrderResponse
 		var createdAt, updatedAt time.Time
 
-		err := db.QueryRow(`
+		err := db.QueryRowContext(ctx, `
             SELECT o.id, o.code, o.weight, o.total_price, o.status, o.note, 
                    o.order_source, o.created_at, o.updated_at,
                    c.name, c.phone, c.address,
-                   s.id, s.name, s.estimated_day
+                   s.id, s.name, s.estimated_day, COALESCE(s.unit,'Kg')
             FROM orders o 
             JOIN customers c ON o.customer_id = c.id 
             JOIN services s ON o.service_id = s.id 
@@ -164,7 +171,7 @@ func GetCustomerOrder(db *sql.DB) gin.HandlerFunc {
 			&order.Status, &order.Note, &order.OrderSource,
 			&createdAt, &updatedAt,
 			&order.CustomerName, &order.CustomerPhone, &order.CustomerAddress,
-			&order.ServiceID, &order.ServiceName, &order.EstimatedDay,
+			&order.ServiceID, &order.ServiceName, &order.EstimatedDay, &order.ServiceUnit,
 		)
 
 		if err != nil {
@@ -179,7 +186,7 @@ func GetCustomerOrder(db *sql.DB) gin.HandlerFunc {
 		order.CreatedAt = createdAt
 		order.UpdatedAt = updatedAt
 
-		rows, err := db.Query(`
+		rows, err := db.QueryContext(ctx, `
             SELECT status, updated_at 
             FROM status_histories 
             WHERE order_id = ? 
@@ -208,16 +215,20 @@ func GetCustomerOrders(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		rows, err := db.Query(`
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
+		rows, err := db.QueryContext(ctx, `
             SELECT o.id, o.code, o.weight, o.total_price, o.status, o.note, 
                    o.order_source, o.created_at, o.updated_at,
                    c.name, c.phone, c.address,
-                   s.id, s.name, s.estimated_day
+                   s.id, s.name, s.estimated_day, COALESCE(s.unit,'Kg')
             FROM orders o 
             JOIN customers c ON o.customer_id = c.id 
             JOIN services s ON o.service_id = s.id 
             WHERE c.phone = ?
             ORDER BY o.created_at DESC
+            LIMIT 20
         `, phone)
 
 		if err != nil {
@@ -235,7 +246,7 @@ func GetCustomerOrders(db *sql.DB) gin.HandlerFunc {
 				&o.Status, &o.Note, &o.OrderSource,
 				&createdAt, &updatedAt,
 				&o.CustomerName, &o.CustomerPhone, &o.CustomerAddress,
-				&o.ServiceID, &o.ServiceName, &o.EstimatedDay,
+				&o.ServiceID, &o.ServiceName, &o.EstimatedDay, &o.ServiceUnit,
 			)
 			o.CreatedAt = createdAt
 			o.UpdatedAt = updatedAt

@@ -5,6 +5,7 @@ import StatusTimeline from '../components/StatusTimeline'
 import api from '../services/api'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '../components/LoadingSpinner'
+import brand from '../config/brand'
 
 const statusOptions = [
   { value: 'pending_pickup', label: 'Menunggu Pickup' },
@@ -66,9 +67,14 @@ const OrderDetail = () => {
     
     let message = ''
     if (newStatus === 'completed') {
-      message = `✅ *Laundry Selesai!*\n\nHalo *${orderData.customer_name}*,\n\nLaundry Anda sudah selesai dan siap diambil! 🎉\n\n📋 *Detail Order:*\n• Kode: *${orderData.code}*\n• Layanan: ${orderData.service_name}\n• Berat: ${orderData.weight} kg\n• Total: *Rp${orderData.total_price?.toLocaleString('id-ID')}*\n\nTerima kasih telah menggunakan layanan Mega Laundry 🧺`
+      message = `✅ *Laundry Selesai!*\n\nHalo *${orderData.customer_name}*,\n\nLaundry Anda sudah selesai dan siap diambil! 🎉\n\n📋 *Detail Order:*\n• Kode: *${orderData.code}*\n• Layanan: ${orderData.service_name}\n• Berat: ${orderData.weight} kg\n• Total: *Rp${orderData.total_price?.toLocaleString('id-ID')}*\n\nTerima kasih telah menggunakan layanan ${brand.name} 🧺`
     } else if (newStatus === 'ready_for_delivery') {
-      message = `📦 *Laundry Siap Diambil!*\n\nHalo *${orderData.customer_name}*,\n\nLaundry Anda sudah selesai diproses dan siap untuk diambil di toko kami.\n\n📋 Kode Order: *${orderData.code}*\n📍 Alamat: 5W43+J59, Jl. Untad I Bumi Roviega, Tondo, Kec. Palu Tim., Kota Palu\n\u23f0 Jam Buka: 08.00 \u2013 21.00 WIB\n\nTerima kasih telah menggunakan layanan Mega Laundry 🧺`
+      const isDeliveryOrder = orderData.order_source !== 'walk_in'
+      if (isDeliveryOrder) {
+        message = `🚐 *Laundry Siap Diantar!*\n\nHalo *${orderData.customer_name}*,\n\nLaundry Anda sudah selesai diproses dan akan segera kami antar ke alamat Anda.\n\n📋 Kode Order: *${orderData.code}*\n📍 Alamat Antar: ${orderData.customer_address || '-'}\n\nTerima kasih telah menggunakan layanan ${brand.name} 🧺`
+      } else {
+        message = `📦 *Laundry Siap Diambil!*\n\nHalo *${orderData.customer_name}*,\n\nLaundry Anda sudah selesai diproses dan siap untuk diambil di toko kami.\n\n📋 Kode Order: *${orderData.code}*\n📍 Alamat: ${brand.address}\n⏰ Jam Buka: ${brand.hours}\n\nTerima kasih telah menggunakan layanan ${brand.name} 🧺`
+      }
     } else if (newStatus === 'picked_up') {
       message = `🧺 *Laundry Sudah Dijemput!*\n\nHalo *${orderData.customer_name}*,\n\nLaundry Anda sudah kami jemput dan sedang diproses.\n\n📋 Kode Order: *${orderData.code}*\n\nCek status kapan saja di: ${window.location.origin}/customer/track/${orderData.code}`
     }
@@ -146,11 +152,21 @@ const OrderDetail = () => {
     </div>
   )
 
-  const availableStatusOptions = order?.order_source === 'walk_in'
+  const isDelivery = order?.order_source !== 'walk_in'
+
+  const availableStatusOptions = !isDelivery
     ? statusOptions
         .filter(s => !['pending_pickup', 'picked_up'].includes(s.value))
         .map(s => s.value === 'ready_for_delivery' ? { ...s, label: 'Siap Diambil' } : s)
     : statusOptions.map(s => s.value === 'ready_for_delivery' ? { ...s, label: 'Siap Diantar' } : s)
+
+  // Label yang aware order_source, dipakai di badge header & riwayat
+  const getStatusLabel = (statusValue) => {
+    const opt = statusOptions.find(s => s.value === statusValue)
+    if (!opt) return statusValue
+    if (statusValue === 'ready_for_delivery') return isDelivery ? 'Siap Diantar' : 'Siap Diambil'
+    return opt.label
+  }
 
   const statusColor = statusColors[order?.status] || 'bg-gray-100 text-gray-600 border-gray-200'
 
@@ -168,7 +184,7 @@ const OrderDetail = () => {
           </div>
         </div>
         <span className={`badge border ${statusColor}`}>
-          {statusOptions.find(s => s.value === order?.status)?.label || order?.status}
+          {getStatusLabel(order?.status)}
         </span>
       </div>
 
@@ -189,7 +205,7 @@ const OrderDetail = () => {
                 order?.order_source === 'whatsapp' ? '💬 WhatsApp' : order?.order_source
               } />
               <InfoRow label="Layanan" value={order?.service_name} />
-              <InfoRow label="Berat" value={order?.weight ? `${order.weight} kg` : null} />
+              <InfoRow label="Berat" value={order?.weight ? `${order.weight} ${order.service_unit || 'kg'}` : null} />
               <InfoRow label="Total Harga" value={order?.total_price ? `Rp${order.total_price.toLocaleString('id-ID')}` : null} />
               <div className="col-span-2 sm:col-span-3">
                 <InfoRow label="Alamat" value={order?.customer_address} />
@@ -266,7 +282,7 @@ const OrderDetail = () => {
                       {new Date(h.updated_at).toLocaleString('id-ID')}
                     </span>
                     <span className="px-2.5 py-1 bg-gray-100 rounded-lg text-xs font-medium text-gray-700">
-                      {statusOptions.find(s => s.value === h.status)?.label || h.status}
+                      {getStatusLabel(h.status)}
                     </span>
                   </div>
                 ))}
@@ -327,7 +343,7 @@ const OrderDetail = () => {
                   onClick={() => sendWhatsApp(order, 'ready_for_delivery')}
                   className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors"
                 >
-                  📦 Siap Diambil
+                  📦 {isDelivery ? 'Siap Diantar' : 'Siap Diambil'}
                 </button>
               </div>
             </div>

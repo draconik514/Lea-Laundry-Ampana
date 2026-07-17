@@ -1,6 +1,6 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
-import { EyeIcon } from '@heroicons/react/24/outline'
+import { EyeIcon, PencilSquareIcon } from '@heroicons/react/24/outline'
 
 export const statusMap = {
   pending_pickup: { label: 'Menunggu Pickup', color: 'bg-amber-50 text-amber-700 border border-amber-200' },
@@ -11,6 +11,7 @@ export const statusMap = {
   ready_for_delivery: { label: 'Siap Diantar', color: 'bg-orange-50 text-orange-700 border border-orange-200' },
   completed: { label: 'Selesai', color: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
   cancelled: { label: 'Dibatalkan', color: 'bg-red-50 text-red-700 border border-red-200' },
+  price_confirmed: { label: 'Harga Dikonfirmasi', color: 'bg-teal-50 text-teal-700 border border-teal-200' },
 }
 
 const sourceMap = {
@@ -19,7 +20,7 @@ const sourceMap = {
   whatsapp: '💬 WhatsApp',
 }
 
-const OrderTable = ({ orders }) => {
+const OrderTable = ({ orders, onEditPrice }) => {
   if (!orders || orders.length === 0) {
     return (
       <div className="text-center py-16">
@@ -58,7 +59,7 @@ const OrderTable = ({ orders }) => {
                   <p className="text-xs text-gray-400">{order.customer_phone}</p>
                 </td>
                 <td className="py-3.5 px-6 text-sm text-gray-700">{order.service_name}</td>
-                <td className="py-3.5 px-6 text-sm text-gray-700">{order.weight} kg</td>
+                <td className="py-3.5 px-6 text-sm text-gray-700">{order.weight} {order.service_unit || 'kg'}</td>
                 <td className="py-3.5 px-6 text-sm font-semibold text-gray-900">
                   Rp{order.total_price?.toLocaleString('id-ID')}
                 </td>
@@ -69,9 +70,20 @@ const OrderTable = ({ orders }) => {
                   {sourceMap[order.order_source] || order.order_source}
                 </td>
                 <td className="py-3.5 px-6">
-                  <Link to={`/orders/${order.code}`} className="p-2 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors inline-flex">
-                    <EyeIcon className="w-4 h-4" />
-                  </Link>
+                  <div className="flex items-center gap-1">
+                    {onEditPrice && order.order_source !== 'walk_in' && !['completed', 'cancelled'].includes(order.status) && (
+                      <button
+                        onClick={() => onEditPrice(order)}
+                        title="Konfirmasi Harga"
+                        className="p-2 rounded-lg hover:bg-amber-50 text-gray-400 hover:text-amber-600 transition-colors inline-flex"
+                      >
+                        <PencilSquareIcon className="w-4 h-4" />
+                      </button>
+                    )}
+                    <Link to={`/orders/${order.code}`} className="p-2 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors inline-flex">
+                      <EyeIcon className="w-4 h-4" />
+                    </Link>
+                  </div>
                 </td>
               </tr>
             )

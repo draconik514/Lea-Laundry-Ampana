@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,12 @@ const dbTimeout = 5 * time.Second
 
 type UpdateOrderStatusRequest struct {
 	Status string `json:"status" binding:"required"`
+}
+
+type UpdateOrderPriceRequest struct {
+	Weight     float64 `json:"weight" binding:"required,gt=0"`
+	TotalPrice float64 `json:"total_price" binding:"required,gte=0"`
+	Note       string  `json:"note"`
 }
 
 type AdminOrderRequest struct {
@@ -43,7 +50,10 @@ type OrderResponse struct {
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 	ServiceName     string    `json:"service_name"`
+	ServiceID       int       `json:"service_id"`
 	EstimatedDay    int       `json:"estimated_day"`
+	PricePerKg      float64   `json:"price_per_kg"`
+	ServiceUnit     string    `json:"service_unit"`
 }
 
 func CreateAdminOrder(db *sql.DB) gin.HandlerFunc {
@@ -151,7 +161,7 @@ func GetOrders(db *sql.DB) gin.HandlerFunc {
 
 		query := `SELECT o.id, o.code, c.name, c.phone, c.address,
 				   o.weight, o.total_price, o.status, o.note, o.order_source,
-				   o.created_at, o.updated_at, s.name, s.estimated_day` +
+				   o.created_at, o.updated_at, s.id, s.name, s.estimated_day, s.price_per_kg, COALESCE(s.unit,'Kg')` +
 			baseWhere + " ORDER BY o.created_at DESC LIMIT ? OFFSET ?"
 		args = append(args, pageSize, offset)
 
@@ -168,7 +178,7 @@ func GetOrders(db *sql.DB) gin.HandlerFunc {
 			if err := rows.Scan(
 				&o.ID, &o.Code, &o.CustomerName, &o.CustomerPhone, &o.CustomerAddress,
 				&o.Weight, &o.TotalPrice, &o.Status, &o.Note, &o.OrderSource,
-				&o.CreatedAt, &o.UpdatedAt, &o.ServiceName, &o.EstimatedDay,
+				&o.CreatedAt, &o.UpdatedAt, &o.ServiceID, &o.ServiceName, &o.EstimatedDay, &o.PricePerKg, &o.ServiceUnit,
 			); err != nil {
 				continue
 			}
@@ -255,13 +265,14 @@ func GetOrderByCode(db *sql.DB) gin.HandlerFunc {
 			ServiceName     string    `json:"service_name"`
 			ServiceID       int       `json:"service_id"`
 			EstimatedDay    int       `json:"estimated_day"`
+			ServiceUnit     string    `json:"service_unit"`
 		}
 
 		err := db.QueryRowContext(ctx, `
             SELECT o.id, o.code, c.name, c.phone, c.address,
                    o.weight, o.total_price, o.status, o.note, o.order_source,
                    o.created_at, o.updated_at,
-                   s.id, s.name, s.estimated_day
+                   s.id, s.name, s.estimated_day, COALESCE(s.unit,'Kg')
             FROM orders o
             JOIN customers c ON o.customer_id = c.id
             JOIN services s ON o.service_id = s.id
@@ -269,7 +280,7 @@ func GetOrderByCode(db *sql.DB) gin.HandlerFunc {
         `, code).Scan(
 			&order.ID, &order.Code, &order.CustomerName, &order.CustomerPhone, &order.CustomerAddress,
 			&order.Weight, &order.TotalPrice, &order.Status, &order.Note, &order.OrderSource,
-			&order.CreatedAt, &order.UpdatedAt, &order.ServiceID, &order.ServiceName, &order.EstimatedDay,
+			&order.CreatedAt, &order.UpdatedAt, &order.ServiceID, &order.ServiceName, &order.EstimatedDay, &order.ServiceUnit,
 		)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
@@ -334,6 +345,148 @@ func UpdateOrderStatus(db *sql.DB) gin.HandlerFunc {
 		db.ExecContext(ctx, "INSERT INTO status_histories (order_id, status) VALUES (?, ?)", id, req.Status)
 
 		c.JSON(http.StatusOK, gin.H{"message": "Status updated successfully"})
+	}
+}
+
+func UpdateOrderPrice(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, _ := strconv.Atoi(c.Param("id"))
+		var req UpdateOrderPriceRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
+		// Ambil data order + customer untuk notif WA
+		var customerPhone, customerName, orderCode string
+		var serviceName string
+		err := db.QueryRowContext(ctx, `
+			SELECT c.phone, c.name, o.code, s.name
+			FROM orders o
+			JOIN customers c ON o.customer_id = c.id
+			JOIN services s ON o.service_id = s.id
+			WHERE o.id = ?
+		`, id).Scan(&customerPhone, &customerName, &orderCode, &serviceName)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Order tidak ditemukan"})
+			return
+		}
+
+		_, err = db.ExecContext(ctx,
+			`UPDATE orders SET weight = ?, total_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+			req.Weight, req.TotalPrice, id,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal update harga"})
+			return
+		}
+
+		db.ExecContext(ctx, `INSERT INTO status_histories (order_id, status) VALUES (?, ?)`, id, "price_confirmed")
+
+		// Buat link WA notifikasi ke customer
+		phone := strings.TrimPrefix(customerPhone, "0")
+		msg := fmt.Sprintf(
+			"Halo %s! 👋\n\nHarga laundry kamu sudah dikonfirmasi setelah ditimbang ulang:\n\n"+
+				"📦 Kode Order: *%s*\n"+
+				"👕 Layanan: %s\n"+
+				"⚖️ Berat: %.1f kg\n"+
+				"💰 Total Harga: *Rp%s*\n",
+			customerName, orderCode, serviceName, req.Weight,
+			formatRupiah(req.TotalPrice),
+		)
+		if req.Note != "" {
+			msg += fmt.Sprintf("📝 Catatan: %s\n", req.Note)
+		}
+		appURL := os.Getenv("APP_URL")
+		if appURL == "" {
+			appURL = "https://laundryflow.vercel.app"
+		}
+		msg += "\nSilakan cek status laundry kamu di: " + appURL + "/tracking/" + orderCode
+
+		waURL := fmt.Sprintf("https://wa.me/62%s?text=%s", phone, encodeWA(msg))
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":    "Harga berhasil diupdate",
+			"wa_url":     waURL,
+			"weight":     req.Weight,
+			"total_price": req.TotalPrice,
+		})
+	}
+}
+
+func formatRupiah(n float64) string {
+	s := fmt.Sprintf("%.0f", n)
+	result := ""
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result += "."
+		}
+		result += string(c)
+	}
+	return result
+}
+
+func encodeWA(s string) string {
+	s = strings.ReplaceAll(s, " ", "%20")
+	s = strings.ReplaceAll(s, "\n", "%0A")
+	s = strings.ReplaceAll(s, "*", "%2A")
+	s = strings.ReplaceAll(s, "#", "%23")
+	return s
+}
+
+func GetOrdersByRange(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		dateFrom := c.Query("date_from")
+		dateTo := c.Query("date_to")
+		if dateFrom == "" || dateTo == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "date_from dan date_to wajib diisi"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+
+		rows, err := db.QueryContext(ctx, `
+			SELECT o.code, c.name, c.phone, c.address,
+				   s.name, o.weight, o.total_price, o.status, o.order_source, o.created_at
+			FROM orders o
+			JOIN customers c ON o.customer_id = c.id
+			JOIN services s ON o.service_id = s.id
+			WHERE DATE(o.created_at) BETWEEN ? AND ?
+			ORDER BY o.created_at ASC
+		`, dateFrom, dateTo)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		type ExportRow struct {
+			Code        string    `json:"code"`
+			Customer    string    `json:"customer_name"`
+			Phone       string    `json:"customer_phone"`
+			Address     string    `json:"customer_address"`
+			Service     string    `json:"service_name"`
+			Weight      float64   `json:"weight"`
+			TotalPrice  float64   `json:"total_price"`
+			Status      string    `json:"status"`
+			OrderSource string    `json:"order_source"`
+			CreatedAt   time.Time `json:"created_at"`
+		}
+
+		data := []ExportRow{}
+		for rows.Next() {
+			var r ExportRow
+			if err := rows.Scan(&r.Code, &r.Customer, &r.Phone, &r.Address,
+				&r.Service, &r.Weight, &r.TotalPrice, &r.Status, &r.OrderSource, &r.CreatedAt); err != nil {
+				continue
+			}
+			data = append(data, r)
+		}
+		c.JSON(http.StatusOK, gin.H{"data": data, "total": len(data)})
 	}
 }
 

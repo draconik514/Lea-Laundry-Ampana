@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"strconv"
@@ -11,16 +12,33 @@ import (
 
 type ServiceRequest struct {
 	Name         string  `json:"name" binding:"required"`
+	Category     string  `json:"category"`
+	Description  string  `json:"description"`
+	Unit         string  `json:"unit"`
 	PricePerKg   float64 `json:"price_per_kg" binding:"required"`
 	EstimatedDay int     `json:"estimated_day" binding:"required"`
 }
 
+type ServiceResponse struct {
+	ID           int       `json:"id"`
+	Name         string    `json:"name"`
+	Category     string    `json:"category"`
+	Description  string    `json:"description"`
+	Unit         string    `json:"unit"`
+	PricePerKg   float64   `json:"price_per_kg"`
+	EstimatedDay int       `json:"estimated_day"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 func GetServices(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		rows, err := db.Query(`
-            SELECT id, name, price_per_kg, estimated_day, created_at 
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
+		rows, err := db.QueryContext(ctx, `
+            SELECT id, name, COALESCE(category,'Umum'), COALESCE(description,''), COALESCE(unit,'Kg'), price_per_kg, estimated_day, created_at 
             FROM services 
-            ORDER BY id
+            ORDER BY category, price_per_kg
         `)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -28,18 +46,10 @@ func GetServices(db *sql.DB) gin.HandlerFunc {
 		}
 		defer rows.Close()
 
-		type Service struct {
-			ID           int       `json:"id"`
-			Name         string    `json:"name"`
-			PricePerKg   float64   `json:"price_per_kg"`
-			EstimatedDay int       `json:"estimated_day"`
-			CreatedAt    time.Time `json:"created_at"`
-		}
-
-		services := []Service{}
+		services := []ServiceResponse{}
 		for rows.Next() {
-			var s Service
-			rows.Scan(&s.ID, &s.Name, &s.PricePerKg, &s.EstimatedDay, &s.CreatedAt)
+			var s ServiceResponse
+			rows.Scan(&s.ID, &s.Name, &s.Category, &s.Description, &s.Unit, &s.PricePerKg, &s.EstimatedDay, &s.CreatedAt)
 			services = append(services, s)
 		}
 
@@ -54,10 +64,16 @@ func CreateService(db *sql.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		if req.Category == "" {
+			req.Category = "Umum"
+		}
 
-		result, err := db.Exec(
-			`INSERT INTO services (name, price_per_kg, estimated_day) VALUES (?, ?, ?)`,
-			req.Name, req.PricePerKg, req.EstimatedDay,
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
+		result, err := db.ExecContext(ctx,
+			`INSERT INTO services (name, category, description, unit, price_per_kg, estimated_day) VALUES (?, ?, ?, ?, ?, ?)`,
+			req.Name, req.Category, req.Description, req.Unit, req.PricePerKg, req.EstimatedDay,
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create service"})
@@ -77,10 +93,16 @@ func UpdateService(db *sql.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		if req.Category == "" {
+			req.Category = "Umum"
+		}
 
-		_, err := db.Exec(
-			`UPDATE services SET name = ?, price_per_kg = ?, estimated_day = ? WHERE id = ?`,
-			req.Name, req.PricePerKg, req.EstimatedDay, id,
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
+		_, err := db.ExecContext(ctx,
+			`UPDATE services SET name = ?, category = ?, description = ?, unit = ?, price_per_kg = ?, estimated_day = ? WHERE id = ?`,
+			req.Name, req.Category, req.Description, req.Unit, req.PricePerKg, req.EstimatedDay, id,
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update service"})
@@ -95,7 +117,20 @@ func DeleteService(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, _ := strconv.Atoi(c.Param("id"))
 
-		_, err := db.Exec("DELETE FROM services WHERE id = ?", id)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
+		defer cancel()
+
+		// Cek apakah service masih dipakai oleh order
+		var count int
+		db.QueryRowContext(ctx, "SELECT COUNT(*) FROM orders WHERE service_id = ?", id).Scan(&count)
+		if count > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Layanan tidak bisa dihapus karena masih digunakan oleh " + strconv.Itoa(count) + " pesanan",
+			})
+			return
+		}
+
+		_, err := db.ExecContext(ctx, "DELETE FROM services WHERE id = ?", id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete service"})
 			return

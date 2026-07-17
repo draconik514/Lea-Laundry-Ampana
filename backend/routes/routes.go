@@ -10,7 +10,8 @@ import (
 )
 
 func SetupRouter(db *sql.DB) *gin.Engine {
-	router := gin.Default()
+	router := gin.New()
+	router.Use(gin.Recovery())
 
 	// Rate limiting global
 	router.Use(middleware.RateLimit())
@@ -18,10 +19,13 @@ func SetupRouter(db *sql.DB) *gin.Engine {
 	// CORS
 	allowedOrigin := os.Getenv("CORS_ORIGIN")
 	if allowedOrigin == "" {
-		allowedOrigin = "*"
+		allowedOrigin = "http://localhost:5173"
 	}
 	router.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		origin := c.Request.Header.Get("Origin")
+		if origin == allowedOrigin {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
 		if c.Request.Method == "OPTIONS" {
@@ -66,9 +70,11 @@ func SetupRouter(db *sql.DB) *gin.Engine {
 		// Orders
 		api.GET("/notifications", handlers.GetNotifications(db))
 		api.GET("/orders", handlers.GetOrders(db))
+		api.GET("/orders/export", handlers.GetOrdersByRange(db))
 		api.GET("/order/:code", handlers.GetOrderByCode(db))
 		api.POST("/orders", handlers.CreateAdminOrder(db))
 		api.PUT("/orders/:id/status", handlers.UpdateOrderStatus(db))
+		api.PUT("/orders/:id/price", handlers.UpdateOrderPrice(db))
 		api.DELETE("/orders/:id", handlers.DeleteOrder(db))
 
 		// Services - Admin only
@@ -78,6 +84,7 @@ func SetupRouter(db *sql.DB) *gin.Engine {
 
 		// Feedbacks
 		api.GET("/feedbacks", handlers.GetFeedbacks(db))
+		api.DELETE("/feedbacks/:id", handlers.DeleteFeedback(db))
 
 		// Reports
 		api.GET("/reports/financial", handlers.GetFinancialReport(db))

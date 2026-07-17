@@ -14,7 +14,12 @@ import api from '../services/api'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '../components/LoadingSpinner'
 
-const COLORS = ['#3b82f6', '#8b5cf6', '#06b6d4', '#22c55e', '#f59e0b', '#ef4444']
+const COLORS_CATEGORY = {
+  'Cuci Komplit': '#3b82f6',
+  'Setrika':      '#f97316',
+  'Cuci Lipat':   '#22c55e',
+  'Umum':         '#8b5cf6',
+}
 const fmt = (v) => `Rp${Number(v).toLocaleString('id-ID')}`
 
 const Reports = () => {
@@ -29,9 +34,11 @@ const Reports = () => {
   const [chartMode, setChartMode] = useState('daily')
 
   useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    const yearStart = new Date().getFullYear() + '-01-01'
     Promise.all([
       api.get('/reports/financial'),
-      api.get('/orders?page=1')
+      api.get(`/orders/export?date_from=${yearStart}&date_to=${today}`)
     ]).then(([{ data: d }, { data: o }]) => {
       setReport({
         dailyRevenue: d.daily_revenue ?? 0,
@@ -43,6 +50,7 @@ const Reports = () => {
         averageOrder: d.average_order ?? 0,
         revenueByService: (d.revenue_by_service ?? []).map(s => ({
           serviceName: s.service_name,
+          category: s.category || 'Umum',
           totalOrders: s.total_orders,
           totalRevenue: s.total_revenue
         })),
@@ -150,10 +158,6 @@ const Reports = () => {
         }
       })
 
-      const applyStyle = (ws, cellRef, style) => {
-        if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' }
-        ws[cellRef].s = style
-      }
 
       // ==========================================
       // SHEET 1: RINGKASAN
@@ -462,58 +466,103 @@ const Reports = () => {
           })()}
         </div>
 
-        {/* Pie chart */}
+        {/* Pie chart — per kategori */}
         <div className="card">
-          <div className="mb-6">
-            <h3 className="font-semibold text-gray-900">Per Layanan</h3>
-            <p className="text-xs text-gray-400 mt-0.5">Distribusi pendapatan</p>
+          <div className="mb-4">
+            <h3 className="font-semibold text-gray-900">Per Kategori</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Distribusi pendapatan per jenis layanan</p>
           </div>
           {report.revenueByService.length === 0 ? (
             <div className="flex items-center justify-center h-48 text-gray-400 text-sm">Belum ada data</div>
-          ) : (
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie data={report.revenueByService} dataKey="totalRevenue" nameKey="serviceName" cx="50%" cy="45%" outerRadius={80} innerRadius={40}>
-                  {report.revenueByService.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-                <Tooltip formatter={(v) => fmt(v)} />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '12px' }} />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
+          ) : (() => {
+            // Kelompokkan per kategori untuk pie
+            const byCategory = {}
+            report.revenueByService.forEach(s => {
+              const cat = s.category || 'Umum'
+              if (!byCategory[cat]) byCategory[cat] = { name: cat, totalRevenue: 0, totalOrders: 0 }
+              byCategory[cat].totalRevenue += Number(s.totalRevenue)
+              byCategory[cat].totalOrders += s.totalOrders
+            })
+            const pieData = Object.values(byCategory)
+            return (
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart>
+                  <Pie data={pieData} dataKey="totalRevenue" nameKey="name" cx="50%" cy="45%" outerRadius={80} innerRadius={40}>
+                    {pieData.map((entry) => (
+                      <Cell key={entry.name} fill={COLORS_CATEGORY[entry.name] || '#8b5cf6'} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v) => fmt(v)} />
+                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '12px' }} />
+                </PieChart>
+              </ResponsiveContainer>
+            )
+          })()}
         </div>
       </div>
 
-      {/* Service detail table */}
+      {/* Service detail table — grouped per kategori */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-gray-900">Detail per Layanan</h3>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-gray-100">
-                <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Layanan</th>
-                <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Order</th>
-                <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Pendapatan</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {report.revenueByService.map((item, idx) => (
-                <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                      <span className="text-sm font-medium text-gray-900">{item.serviceName}</span>
+        {(() => {
+          // Kelompokkan per kategori
+          const grouped = {}
+          report.revenueByService.forEach(s => {
+            const cat = s.category || 'Umum'
+            if (!grouped[cat]) grouped[cat] = []
+            grouped[cat].push(s)
+          })
+          return (
+            <div className="space-y-6">
+              {Object.entries(grouped).map(([cat, items]) => {
+                const catColor = COLORS_CATEGORY[cat] || '#8b5cf6'
+                const catTotal = items.reduce((a, s) => a + Number(s.totalRevenue), 0)
+                const catOrders = items.reduce((a, s) => a + s.totalOrders, 0)
+                return (
+                  <div key={cat}>
+                    {/* Header kategori */}
+                    <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: catColor }} />
+                        <span className="font-semibold text-gray-800 text-sm">{cat}</span>
+                        <span className="text-xs text-gray-400">{catOrders} order</span>
+                      </div>
+                      <span className="text-sm font-bold text-gray-900">{fmt(catTotal)}</span>
                     </div>
-                  </td>
-                  <td className="py-3 px-4 text-sm text-right text-gray-600">{item.totalOrders}</td>
-                  <td className="py-3 px-4 text-sm text-right font-semibold text-gray-900">{fmt(item.totalRevenue)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr>
+                            <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Tier</th>
+                            <th className="text-right py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Order</th>
+                            <th className="text-right py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Pendapatan</th>
+                            <th className="text-right py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Rata-rata</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {items.map((item, idx) => {
+                            const tierName = item.serviceName.replace(`${cat} — `, '')
+                            const avg = item.totalOrders > 0 ? Math.round(item.totalRevenue / item.totalOrders) : 0
+                            return (
+                              <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                <td className="py-2.5 px-3 text-sm text-gray-700">{tierName}</td>
+                                <td className="py-2.5 px-3 text-sm text-right text-gray-600">{item.totalOrders}</td>
+                                <td className="py-2.5 px-3 text-sm text-right font-semibold text-gray-900">{fmt(item.totalRevenue)}</td>
+                                <td className="py-2.5 px-3 text-sm text-right text-gray-500">{fmt(avg)}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })()}
       </div>
     </div>
   )

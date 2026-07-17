@@ -5,6 +5,7 @@ import FeedbackModal from '../components/FeedbackModal'
 import api from '../services/api'
 import toast from 'react-hot-toast'
 import { MagnifyingGlassIcon } from '@heroicons/react/24/outline'
+import brand from '../config/brand'
 
 const CustomerTracking = () => {
   const { code: urlCode } = useParams()
@@ -49,8 +50,10 @@ const CustomerTracking = () => {
 
   const statusLabels = {
     pending_pickup: 'Menunggu Pickup', picked_up: 'Dijemput', washing: 'Dicuci',
-    drying: 'Dikeringkan', ironing: 'Disetrika', ready_for_delivery: 'Siap Diambil',
-    completed: 'Selesai', cancelled: 'Dibatalkan'
+    drying: 'Dikeringkan', ironing: 'Disetrika',
+    ready_for_delivery: isWalkIn ? 'Siap Diambil' : 'Siap Diantar',
+    completed: 'Selesai', cancelled: 'Dibatalkan',
+    price_confirmed: '✅ Harga Dikonfirmasi Admin',
   }
 
   // Filter history untuk walk_in - sembunyikan pending_pickup & picked_up
@@ -68,7 +71,7 @@ const CustomerTracking = () => {
               <img src="/laundryfoto.jpg" alt="Mega Laundry" className="w-full h-full object-cover" />
             </div>
             <div>
-              <p className="font-bold text-gray-900 text-sm leading-tight">Mega Laundry</p>
+              <p className="font-bold text-gray-900 text-sm leading-tight">{brand.name}</p>
               <p className="text-xs text-gray-400 leading-tight">Tracking Pesanan</p>
             </div>
           </div>
@@ -138,13 +141,33 @@ const CustomerTracking = () => {
                 </div>
                 <div>
                   <p className="text-gray-400">Berat</p>
-                  <p className="font-semibold text-gray-800">{order.weight} kg</p>
+                  <p className="font-semibold text-gray-800">
+                    {order.weight > 0
+                      ? `${order.weight} ${order.service_unit || 'kg'}`
+                      : <span className="text-amber-500 text-xs">Belum ditimbang</span>}
+                  </p>
                 </div>
                 <div>
                   <p className="text-gray-400">Total Harga</p>
-                  <p className="font-semibold text-gray-800">Rp{order.total_price?.toLocaleString('id-ID')}</p>
+                  {order.weight > 0
+                    ? <p className="font-semibold text-gray-800">Rp{order.total_price?.toLocaleString('id-ID')}</p>
+                    : <p className="text-amber-500 text-xs font-medium">Menunggu konfirmasi admin</p>
+                  }
                 </div>
               </div>
+
+              {/* Banner harga dikonfirmasi */}
+              {history.some(h => h.status === 'price_confirmed') && (
+                <div className="mt-4 bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 flex items-start gap-3">
+                  <span className="text-teal-500 text-lg leading-none">✅</span>
+                  <div>
+                    <p className="text-sm font-semibold text-teal-700">Harga Sudah Dikonfirmasi Admin</p>
+                    <p className="text-xs text-teal-600 mt-0.5">
+                      Berat: <strong>{order.weight} {order.service_unit || 'kg'}</strong> · Total: <strong>Rp{order.total_price?.toLocaleString('id-ID')}</strong>
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
                 <div>
@@ -157,7 +180,7 @@ const CustomerTracking = () => {
                   </p>
                 </div>
                 <a
-                  href={`https://wa.me/62${order.customer_phone?.replace(/^0/, '')}`}
+                  href={`https://wa.me/${brand.adminWa}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors"

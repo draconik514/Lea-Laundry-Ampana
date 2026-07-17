@@ -4,9 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+var (
+	reportCache     *FinancialReport
+	reportCacheTime time.Time
+	reportMu        sync.Mutex
+)
+
+const reportCacheTTL = 5 * time.Minute
 
 type FinancialReport struct {
 	DailyRevenue     float64            `json:"daily_revenue"`
@@ -22,6 +32,7 @@ type FinancialReport struct {
 
 type RevenueByService struct {
 	ServiceName  string  `json:"service_name"`
+	Category     string  `json:"category"`
 	TotalOrders  int     `json:"total_orders"`
 	TotalRevenue float64 `json:"total_revenue"`
 }
@@ -34,6 +45,15 @@ type DailyData struct {
 
 func GetFinancialReport(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		reportMu.Lock()
+		if reportCache != nil && time.Since(reportCacheTime) < reportCacheTTL {
+			cached := *reportCache
+			reportMu.Unlock()
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+		reportMu.Unlock()
+
 		ctx, cancel := context.WithTimeout(c.Request.Context(), dbTimeout)
 		defer cancel()
 
@@ -69,16 +89,17 @@ func GetFinancialReport(db *sql.DB) gin.HandlerFunc {
 		}
 
 		rows, err := db.QueryContext(ctx, `
-			SELECT s.name, COUNT(o.id), COALESCE(SUM(o.total_price), 0)
+			SELECT s.name, COALESCE(s.category,'Umum'), COUNT(o.id), COALESCE(SUM(o.total_price), 0)
 			FROM services s
 			LEFT JOIN orders o ON s.id = o.service_id AND o.status = 'completed'
-			GROUP BY s.name
+			GROUP BY s.name, s.category
+			ORDER BY s.category, s.name
 		`)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
 				var r RevenueByService
-				rows.Scan(&r.ServiceName, &r.TotalOrders, &r.TotalRevenue)
+				rows.Scan(&r.ServiceName, &r.Category, &r.TotalOrders, &r.TotalRevenue)
 				report.RevenueByService = append(report.RevenueByService, r)
 			}
 		}
@@ -98,6 +119,11 @@ func GetFinancialReport(db *sql.DB) gin.HandlerFunc {
 				report.DailyData = append(report.DailyData, d)
 			}
 		}
+
+		reportMu.Lock()
+		reportCache = &report
+		reportCacheTime = time.Now()
+		reportMu.Unlock()
 
 		c.JSON(http.StatusOK, report)
 	}

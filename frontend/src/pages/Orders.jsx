@@ -22,14 +22,14 @@ const sourceOptions = [
   { value: 'website', label: '🖥️ Website' },
 ]
 
+const sourceLabels = {
+  website: 'Website', walk_in: 'Datang Langsung', whatsapp: 'WhatsApp'
+}
+
 const statusLabels = {
   pending_pickup: 'Menunggu Pickup', picked_up: 'Dijemput', washing: 'Dicuci',
   drying: 'Dikeringkan', ironing: 'Disetrika', ready_for_delivery: 'Siap Diantar',
-  completed: 'Selesai', cancelled: 'Dibatalkan'
-}
-
-const sourceLabels = {
-  website: 'Website', walk_in: 'Datang Langsung', whatsapp: 'WhatsApp'
+  completed: 'Selesai', cancelled: 'Dibatalkan', price_confirmed: 'Harga Dikonfirmasi',
 }
 
 const emptyForm = {
@@ -80,6 +80,12 @@ const Orders = () => {
   const [showExport, setShowExport] = useState(false)
   const [weekOffset, setWeekOffset] = useState(0)
   const [exporting, setExporting] = useState(false)
+
+  // Modal edit harga
+  const [editPriceOrder, setEditPriceOrder] = useState(null)
+  const [editPriceForm, setEditPriceForm] = useState({ weight: '', total_price: '', note: '' })
+  const [editPriceLoading, setEditPriceLoading] = useState(false)
+  const [waURL, setWaURL] = useState(null)
 
   // Debounce search — reset ke page 1 saat search berubah
   useEffect(() => {
@@ -141,7 +147,7 @@ const Orders = () => {
     try {
       const { data } = await api.post('/orders', {
         ...form,
-        weight: parseFloat(form.weight),
+        weight: parseFloat(form.weight) || 0,
         service_id: parseInt(form.service_id),
       })
       toast.success('Pesanan berhasil dibuat!')
@@ -159,16 +165,12 @@ const Orders = () => {
     setExporting(true)
     try {
       const { monday, sunday } = getWeekRange(weekOffset)
-      const allOrders = []
+      const params = new URLSearchParams()
+      params.append('date_from', formatDateShort(monday))
+      params.append('date_to', formatDateShort(sunday))
 
-      // Ambil per hari agar tidak bypass pagination
-      for (let d = new Date(monday); d <= sunday; d.setDate(d.getDate() + 1)) {
-        const p = new URLSearchParams()
-        p.append('date', formatDateShort(new Date(d)))
-        p.append('page', '1')
-        const { data } = await api.get(`/orders?${p}`)
-        if (data.data?.length) allOrders.push(...data.data)
-      }
+      const { data } = await api.get(`/orders/export?${params}`)
+      const allOrders = data.data || []
 
       if (allOrders.length === 0) {
         toast.error('Tidak ada pesanan di minggu ini')
@@ -237,7 +239,34 @@ const Orders = () => {
     }
   }
 
+  const openEditPrice = (order) => {
+    setEditPriceOrder(order)
+    setEditPriceForm({ weight: '', total_price: '', note: '' })
+    setWaURL(null)
+  }
+
+  const handleEditPrice = async (e) => {
+    e.preventDefault()
+    setEditPriceLoading(true)
+    try {
+      const { data } = await api.put(`/orders/${editPriceOrder.id}/price`, {
+        weight: parseFloat(editPriceForm.weight),
+        total_price: parseFloat(editPriceForm.total_price),
+        note: editPriceForm.note,
+      })
+      toast.success('Harga berhasil dikonfirmasi!')
+      setWaURL(data.wa_url)
+      fetchOrders()
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Gagal update harga')
+    } finally {
+      setEditPriceLoading(false)
+    }
+  }
+
   const selectedService = services.find(s => s.id === parseInt(form.service_id))
+  const isSatuan = selectedService?.category === 'Cuci Satuan'
+  const satuanUnit = selectedService?.unit || 'Kg'
   const estimatedPrice = selectedService && form.weight
     ? selectedService.price_per_kg * parseFloat(form.weight || 0)
     : null
@@ -309,7 +338,7 @@ const Orders = () => {
             <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
           </div>
         ) : (
-          <OrderTable orders={orders} />
+        <OrderTable orders={orders} onEditPrice={openEditPrice} />
         )}
 
         {/* Pagination */}
@@ -502,19 +531,82 @@ const Orders = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="label">Layanan <span className="text-red-400">*</span></label>
-                      <select value={form.service_id} onChange={(e) => setForm({ ...form, service_id: e.target.value })} className="input" required>
-                        {services.length === 0 ? <option value="">Memuat...</option> : services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      <select
+                        value={form.service_id}
+                        onChange={(e) => setForm({ ...form, service_id: e.target.value, weight: '' })}
+                        className="input"
+                        required
+                      >
+                        {services.length === 0 ? (
+                          <option value="">Memuat...</option>
+                        ) : (() => {
+                          const grouped = {}
+                          services.forEach(s => {
+                            const cat = s.category || 'Umum'
+                            if (!grouped[cat]) grouped[cat] = []
+                            grouped[cat].push(s)
+                          })
+                          return Object.entries(grouped).map(([cat, items]) => (
+                            <optgroup key={cat} label={`── ${cat} ──`}>
+                              {items.map(s => (
+                                <option key={s.id} value={s.id}>
+                                  {s.name} · Rp{s.price_per_kg.toLocaleString('id-ID')}/{s.unit || 'kg'}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))
+                        })()}
                       </select>
                     </div>
                     <div>
-                      <label className="label">Berat (kg) <span className="text-red-400">*</span></label>
-                      <input type="number" value={form.weight} onChange={(e) => setForm({ ...form, weight: e.target.value })} className="input" placeholder="Contoh: 3" required min="0.5" step="0.5" />
+                      {isSatuan && satuanUnit !== 'Kg' ? (
+                        <>
+                          <label className="label">Jumlah ({satuanUnit}) <span className="text-red-400">*</span></label>
+                          <input
+                            type="number"
+                            value={form.weight}
+                            onChange={(e) => setForm({ ...form, weight: e.target.value })}
+                            className="input"
+                            placeholder={`Jumlah ${satuanUnit}`}
+                            required
+                            min="1"
+                            step="1"
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <label className="label">
+                            Berat (kg)
+                            {isSatuan && satuanUnit === 'Kg'
+                              ? <span className="text-gray-400 font-normal text-xs ml-1">(opsional)</span>
+                              : <span className="text-red-400"> *</span>
+                            }
+                          </label>
+                          <input
+                            type="number"
+                            value={form.weight}
+                            onChange={(e) => setForm({ ...form, weight: e.target.value })}
+                            className="input"
+                            placeholder={isSatuan ? 'Dikonfirmasi admin' : 'Contoh: 3'}
+                            required={!isSatuan}
+                            min="0.5"
+                            step="0.5"
+                          />
+                        </>
+                      )}
                     </div>
                   </div>
-                  {estimatedPrice !== null && estimatedPrice > 0 && (
+                  {isSatuan && satuanUnit === 'Kg' && (
+                    <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-xs text-amber-700">
+                      ⚖️ <strong>Harga dikonfirmasi admin</strong> — item ini dihitung per Kg, berat ditimbang setelah dijemput.
+                    </div>
+                  )}
+                  {estimatedPrice !== null && estimatedPrice > 0 && !(isSatuan && satuanUnit === 'Kg') && (
                     <div className="bg-blue-50 rounded-xl px-4 py-3 flex items-center justify-between">
                       <div>
-                        <p className="text-xs text-blue-500 font-medium">Estimasi Total</p>
+                        <p className="text-xs text-blue-500 font-medium">
+                          {isSatuan ? `Total (${form.weight} ${satuanUnit})` : 'Estimasi Total'}
+                        </p>
                         <p className="text-xl font-bold text-blue-700">Rp{estimatedPrice.toLocaleString('id-ID')}</p>
                       </div>
                       {selectedService && (
@@ -539,6 +631,108 @@ const Orders = () => {
                         Menyimpan...
                       </span>
                     ) : 'Buat Pesanan'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+      {/* Modal Edit Harga */}
+      {editPriceOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => !waURL && setEditPriceOrder(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Konfirmasi Harga</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Order <span className="font-mono font-bold text-blue-600">{editPriceOrder.code}</span> · {editPriceOrder.customer_name}</p>
+              </div>
+              <button onClick={() => setEditPriceOrder(null)} className="p-2 hover:bg-gray-100 rounded-xl">
+                <XMarkIcon className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {waURL ? (
+              <div className="p-6 text-center space-y-4">
+                <div className="w-14 h-14 bg-green-100 rounded-full flex items-center justify-center mx-auto">
+                  <span className="text-2xl">✅</span>
+                </div>
+                <div>
+                  <p className="font-bold text-gray-900">Harga Tersimpan!</p>
+                  <p className="text-sm text-gray-500 mt-1">Klik tombol di bawah untuk kirim notifikasi ke customer via WhatsApp</p>
+                </div>
+                <a
+                  href={waURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full bg-green-500 hover:bg-green-600 text-white font-semibold py-3 rounded-xl transition-colors"
+                >
+                  💬 Kirim Notif WA ke Customer
+                </a>
+                <button onClick={() => setEditPriceOrder(null)} className="btn-secondary w-full">Tutup</button>
+              </div>
+            ) : (
+              <form onSubmit={handleEditPrice} className="p-6 space-y-4">
+                <div className="bg-amber-50 rounded-xl px-4 py-3 text-sm text-amber-700">
+                  ⚖️ Masukkan berat aktual setelah ditimbang ulang
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Berat Aktual (kg) <span className="text-red-400">*</span></label>
+                    <input
+                      type="number"
+                      value={editPriceForm.weight}
+                      onChange={(e) => {
+                        const w = parseFloat(e.target.value) || 0
+                        const auto = w > 0 ? String(Math.round(editPriceOrder.price_per_kg * w)) : ''
+                        setEditPriceForm(f => ({ ...f, weight: e.target.value, total_price: auto }))
+                      }}
+                      className="input"
+                      placeholder="0.0"
+                      min="0.1"
+                      step="0.1"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Total Harga (Rp) <span className="text-red-400">*</span></label>
+                    <input
+                      type="number"
+                      value={editPriceForm.total_price}
+                      onChange={(e) => setEditPriceForm(f => ({ ...f, total_price: e.target.value }))}
+                      className="input"
+                      placeholder="0"
+                      min="0"
+                      required
+                    />
+                  </div>
+                </div>
+                {editPriceForm.weight && editPriceForm.total_price && (
+                  <div className="bg-blue-50 rounded-xl px-4 py-3 flex justify-between items-center">
+                    <span className="text-sm text-blue-600">Total Konfirmasi</span>
+                    <span className="text-lg font-bold text-blue-700">Rp{Number(editPriceForm.total_price).toLocaleString('id-ID')}</span>
+                  </div>
+                )}
+                <div>
+                  <label className="label">Catatan <span className="text-gray-400 font-normal text-xs">(opsional)</span></label>
+                  <input
+                    type="text"
+                    value={editPriceForm.note}
+                    onChange={(e) => setEditPriceForm(f => ({ ...f, note: e.target.value }))}
+                    className="input"
+                    placeholder="Contoh: ada tambahan karpet"
+                  />
+                </div>
+                <div className="flex gap-3 pt-1">
+                  <button type="button" onClick={() => setEditPriceOrder(null)} className="btn-secondary flex-1">Batal</button>
+                  <button type="submit" disabled={editPriceLoading} className="btn-primary flex-1">
+                    {editPriceLoading ? (
+                      <span className="flex items-center gap-2">
+                        <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Menyimpan...
+                      </span>
+                    ) : 'Simpan & Notif WA'}
                   </button>
                 </div>
               </form>

@@ -2,20 +2,35 @@ import React, { useState, useEffect } from 'react'
 import api from '../services/api'
 import { StarIcon } from '@heroicons/react/24/solid'
 import { StarIcon as StarOutline } from '@heroicons/react/24/outline'
-import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline'
+import { ChatBubbleLeftRightIcon, ChevronLeftIcon, ChevronRightIcon, TrashIcon } from '@heroicons/react/24/outline'
 
 const Feedbacks = () => {
-  const [data, setData] = useState({ feedbacks: [], total: 0, avg_rating: 0 })
+  const [data, setData] = useState({ feedbacks: [], total: 0, avg_rating: 0, total_pages: 1, distribution: {} })
   const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(1)
+  const [deleting, setDeleting] = useState(null)
 
-  useEffect(() => {
-    api.get('/feedbacks')
+  const fetchFeedbacks = () => {
+    setLoading(true)
+    api.get(`/feedbacks?page=${page}`)
       .then(r => setData(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
+  }
 
-  const ratingCount = (star) => data.feedbacks.filter(f => f.rating === star).length
+  useEffect(() => { fetchFeedbacks() }, [page])
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Hapus feedback ini?')) return
+    setDeleting(id)
+    try {
+      await api.delete(`/feedbacks/${id}`)
+      fetchFeedbacks()
+    } catch {}
+    setDeleting(null)
+  }
+
+  const ratingCount = (star) => data.distribution?.[star] ?? 0
 
   const Stars = ({ rating, size = 'w-4 h-4' }) => (
     <div className="flex gap-0.5">
@@ -91,11 +106,19 @@ const Feedbacks = () => {
                         <p className="text-xs text-gray-400">Order: <span className="font-mono text-blue-600">{f.order_code}</span></p>
                       </div>
                     </div>
-                    <div className="text-right flex-shrink-0">
+                    <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
                       <Stars rating={f.rating} />
-                      <p className="text-xs text-gray-400 mt-1">
+                      <p className="text-xs text-gray-400">
                         {new Date(f.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
                       </p>
+                      <button
+                        onClick={() => handleDelete(f.id)}
+                        disabled={deleting === f.id}
+                        className="mt-1 p-1.5 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 transition-colors"
+                        title="Hapus feedback"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                   {f.message && (
@@ -105,6 +128,29 @@ const Feedbacks = () => {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Pagination */}
+          {data.total_pages > 1 && (
+            <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
+              <p className="text-sm text-gray-400">Halaman {page} dari {data.total_pages}</p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="p-2 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  <ChevronLeftIcon className="w-4 h-4 text-gray-600" />
+                </button>
+                <button
+                  onClick={() => setPage(p => Math.min(data.total_pages, p + 1))}
+                  disabled={page === data.total_pages}
+                  className="p-2 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  <ChevronRightIcon className="w-4 h-4 text-gray-600" />
+                </button>
+              </div>
             </div>
           )}
         </>
