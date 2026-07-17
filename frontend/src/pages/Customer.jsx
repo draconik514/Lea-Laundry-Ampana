@@ -88,7 +88,6 @@ const Customer = () => {
       setSuccessOrder(data)
       toast.success(`Pesanan berhasil! Kode: ${data.code}`)
 
-      // Kirim notifikasi WA ke admin otomatis
       const trackUrl = `${window.location.origin}/customer/track/${data.code}`
       const serviceName = selectedService?.name || '-'
       const unit = selectedService?.unit || 'kg'
@@ -96,19 +95,30 @@ const Customer = () => {
       const mapsLink = gpsCoords
         ? `https://maps.google.com/?q=${gpsCoords.lat},${gpsCoords.lng}`
         : null
-      const msg =
-        `🧺 *PESANAN ANTAR JEMPUT BARU!*\n\n` +
-        `👤 Nama: *${form.customer_name}*\n` +
-        `📱 WhatsApp: *${form.customer_phone}*\n` +
-        `📍 Alamat: ${form.customer_address}\n` +
-        (mapsLink ? `🗺️ Buka di Maps: ${mapsLink}\n` : '') +
-        `👕 Layanan: ${serviceName}\n` +
-        `⚖️ Jumlah: ${qty}\n` +
-        (form.note ? `📝 Catatan: ${form.note}\n` : '') +
-        `\n📦 Kode Order: *${data.code}*\n` +
-        `🔗 Tracking: ${trackUrl}\n\n` +
-        `Segera konfirmasi penjemputan ke pelanggan.`
-      window.open(`https://wa.me/${ADMIN_WA}?text=${encodeURIComponent(msg)}`, '_blank')
+      const lines = [
+        '🧺 *PESANAN ANTAR JEMPUT BARU!*',
+        '',
+        `👤 Nama: *${form.customer_name}*`,
+        `📱 WhatsApp: *${form.customer_phone}*`,
+        `📍 Alamat: ${form.customer_address}`,
+        ...(mapsLink ? [`🗺 Buka di Maps: ${mapsLink}`] : []),
+        `👕 Layanan: ${serviceName}`,
+        `⚖ Jumlah: ${qty}`,
+        ...(form.note ? [`📝 Catatan: ${form.note}`] : []),
+        '',
+        `📦 Kode Order: *${data.code}*`,
+        `🔗 Tracking: ${trackUrl}`,
+        '',
+        'Segera konfirmasi penjemputan ke pelanggan.',
+      ]
+      const waUrl = `https://wa.me/${ADMIN_WA}?text=${encodeURIComponent(lines.join('\n'))}`
+      const a = document.createElement('a')
+      a.href = waUrl
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
     } catch (err) {
       toast.error(err.response?.data?.error || 'Gagal membuat pesanan')
     } finally {
