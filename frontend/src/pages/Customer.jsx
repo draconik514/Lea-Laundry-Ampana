@@ -101,7 +101,7 @@ const Customer = () => {
         `👤 Nama: *${form.customer_name}*\n` +
         `📱 WhatsApp: *${form.customer_phone}*\n` +
         `📍 Alamat: ${form.customer_address}\n` +
-        (mapsLink ? `🗺️ *Buka di Maps: ${mapsLink}*\n` : '') +
+        (mapsLink ? `🗺️ Buka di Maps: ${mapsLink}\n` : '') +
         `👕 Layanan: ${serviceName}\n` +
         `⚖️ Jumlah: ${qty}\n` +
         (form.note ? `📝 Catatan: ${form.note}\n` : '') +
