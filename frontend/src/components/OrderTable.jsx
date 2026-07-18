@@ -49,6 +49,9 @@ const OrderTable = ({ orders, onEditPrice }) => {
         <tbody className="divide-y divide-gray-50">
           {orders.map((order) => {
             const status = statusMap[order.status] || { label: order.status, color: 'bg-gray-100 text-gray-700' }
+            if (order.status === 'ready_for_delivery' && order.order_source === 'walk_in') {
+              status.label = 'Siap Diambil'
+            }
             return (
               <tr key={order.id} className="hover:bg-gray-50/50 transition-colors">
                 <td className="py-3.5 px-6">
